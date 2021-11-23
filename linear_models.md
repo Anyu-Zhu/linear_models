@@ -20,6 +20,7 @@ library(tidyverse)
 
 ``` r
 library(p8105.datasets)
+library(modelr)
 
 set.seed(1)
 ```
@@ -690,3 +691,188 @@ cv_df %>%
 ```
 
 ![](linear_models_files/figure-gfm/unnamed-chunk-25-1.png)<!-- -->
+
+## Bootstrapping
+
+``` r
+n_samp = 250
+
+sim_df_const = 
+  tibble(
+    x = rnorm(n_samp, 1, 1),
+    error = rnorm(n_samp, 0, 1),
+    y = 2 + 3 * x + error
+  )
+
+sim_df_nonconst = sim_df_const %>% 
+  mutate(
+  error = error * .75 * x,
+  y = 2 + 3 * x + error
+)
+
+sim_df_const %>% 
+  ggplot(aes(x = x, y = y)) +
+  geom_point()
+```
+
+![](linear_models_files/figure-gfm/unnamed-chunk-26-1.png)<!-- -->
+
+``` r
+sim_df_nonconst %>% 
+  ggplot(aes(x = x, y = y)) +
+  geom_point()
+```
+
+![](linear_models_files/figure-gfm/unnamed-chunk-26-2.png)<!-- -->
+
+``` r
+sim_df_const %>% 
+  lm(y ~ x, data = .) %>% 
+  broom::tidy()
+```
+
+    ## # A tibble: 2 × 5
+    ##   term        estimate std.error statistic   p.value
+    ##   <chr>          <dbl>     <dbl>     <dbl>     <dbl>
+    ## 1 (Intercept)     2.11    0.0860      24.5 3.76e- 68
+    ## 2 x               3.02    0.0593      51.0 2.12e-133
+
+## try to use bootstrapping
+
+``` r
+bootstrap_sample = sim_df_nonconst %>% 
+  sample_frac(size = 1, replace = TRUE) %>% 
+  arrange(x)
+
+lm(y ~ x, data = bootstrap_sample)
+```
+
+    ## 
+    ## Call:
+    ## lm(formula = y ~ x, data = bootstrap_sample)
+    ## 
+    ## Coefficients:
+    ## (Intercept)            x  
+    ##       2.066        3.005
+
+## function
+
+``` r
+boot_sample = function(df) {
+  sample_frac(df, size = 1, replace = TRUE)
+}
+```
+
+A tibble to keep track of everything
+
+``` r
+boot_strap_df = 
+  tibble(
+    strap_number = 1:1000,
+    strap_sample = rerun(1000, boot_sample(sim_df_nonconst))
+  )
+```
+
+``` r
+boot_strap_results = 
+  boot_strap_df %>% 
+  mutate(
+    models = map(.x = strap_sample, ~lm(y ~ x, data = .x)),
+    results = map(models, broom::tidy)
+  ) %>% 
+  select(strap_number, results) %>% 
+  unnest(results)
+
+boot_strap_results %>% 
+  ggplot(aes(x = estimate)) +
+  geom_histogram() +
+  facet_grid(~term, scales = "free")
+```
+
+    ## `stat_bin()` using `bins = 30`. Pick better value with `binwidth`.
+
+![](linear_models_files/figure-gfm/unnamed-chunk-31-1.png)<!-- -->
+
+``` r
+lm(y ~ x, data = sim_df_nonconst) %>% 
+  broom::tidy()
+```
+
+    ## # A tibble: 2 × 5
+    ##   term        estimate std.error statistic   p.value
+    ##   <chr>          <dbl>     <dbl>     <dbl>     <dbl>
+    ## 1 (Intercept)     2.01    0.0818      24.5 2.58e- 68
+    ## 2 x               3.10    0.0563      55.1 4.19e-141
+
+``` r
+boot_strap_results %>% 
+  group_by(term) %>% 
+  summarize(
+    se = sd(estimate)
+  )
+```
+
+    ## # A tibble: 2 × 2
+    ##   term            se
+    ##   <chr>        <dbl>
+    ## 1 (Intercept) 0.0583
+    ## 2 x           0.0671
+
+## Use modelr
+
+``` r
+sim_df_nonconst %>% 
+  bootstrap(n = 1000, id = "strap_number") %>% 
+  mutate(
+    models = map(.x = strap, ~lm(y ~ x, data = .x)),
+    results = map(models, broom::tidy)
+  )
+```
+
+    ## # A tibble: 1,000 × 4
+    ##    strap                strap_number models results         
+    ##    <list>               <chr>        <list> <list>          
+    ##  1 <resample [250 x 3]> 0001         <lm>   <tibble [2 × 5]>
+    ##  2 <resample [250 x 3]> 0002         <lm>   <tibble [2 × 5]>
+    ##  3 <resample [250 x 3]> 0003         <lm>   <tibble [2 × 5]>
+    ##  4 <resample [250 x 3]> 0004         <lm>   <tibble [2 × 5]>
+    ##  5 <resample [250 x 3]> 0005         <lm>   <tibble [2 × 5]>
+    ##  6 <resample [250 x 3]> 0006         <lm>   <tibble [2 × 5]>
+    ##  7 <resample [250 x 3]> 0007         <lm>   <tibble [2 × 5]>
+    ##  8 <resample [250 x 3]> 0008         <lm>   <tibble [2 × 5]>
+    ##  9 <resample [250 x 3]> 0009         <lm>   <tibble [2 × 5]>
+    ## 10 <resample [250 x 3]> 0010         <lm>   <tibble [2 × 5]>
+    ## # … with 990 more rows
+
+``` r
+data("nyc_airbnb")
+```
+
+``` r
+nyc_airbnb = 
+  nyc_airbnb %>% 
+  mutate(stars = review_scores_location / 2) %>% 
+  rename(
+    borough = neighbourhood_group) %>% 
+  filter(borough != "Staten Island") %>% 
+  select(price, stars, borough, room_type)
+```
+
+``` r
+airbnb_bootstrap_results = nyc_airbnb %>% 
+  filter(borough == "Manhattan") %>% 
+  bootstrap(n = 1000, id = "strap_number") %>% 
+  mutate(
+    models = map(.x = strap, ~lm(price ~ stars, data = .x)),
+    results = map(models, broom::tidy)
+  ) %>% 
+  select(strap_number, results) %>% 
+  unnest(results)
+
+airbnb_bootstrap_results %>% 
+  filter(term == "stars") %>% 
+  ggplot(aes(estimate)) +
+  geom_density()
+```
+
+![](linear_models_files/figure-gfm/unnamed-chunk-35-1.png)<!-- -->
